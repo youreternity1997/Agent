@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { transcribeAudio } from "../api/client";
 
 const props = defineProps<{ disabled: boolean }>();
 const emit = defineEmits<{ send: [text: string] }>();
 
 const text = ref("");
+const isRecording = ref(false);
+const isTranscribing = ref(false);
+const micError = ref("");
+
+let mediaRecorder: MediaRecorder | null = null;
+let audioChunks: Blob[] = [];
+let mediaStream: MediaStream | null = null;
 
 function submit() {
   const value = text.value.trim();
@@ -19,10 +27,61 @@ function onKeydown(e: KeyboardEvent) {
     submit();
   }
 }
+
+async function toggleRecording() {
+  if (isRecording.value) {
+    mediaRecorder?.stop();
+    return;
+  }
+
+  micError.value = "";
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    micError.value = "無法取得麥克風權限";
+    return;
+  }
+
+  audioChunks = [];
+  mediaRecorder = new MediaRecorder(mediaStream);
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) audioChunks.push(e.data);
+  };
+  mediaRecorder.onstop = async () => {
+    isRecording.value = false;
+    mediaStream?.getTracks().forEach((t) => t.stop());
+    mediaStream = null;
+
+    if (audioChunks.length === 0) return;
+    const blob = new Blob(audioChunks, { type: "audio/webm" });
+    isTranscribing.value = true;
+    try {
+      const transcribed = await transcribeAudio(blob);
+      text.value = text.value ? `${text.value} ${transcribed}` : transcribed;
+    } catch (err) {
+      micError.value = err instanceof Error ? err.message : "語音轉文字失敗";
+    } finally {
+      isTranscribing.value = false;
+    }
+  };
+
+  mediaRecorder.start();
+  isRecording.value = true;
+}
 </script>
 
 <template>
   <form class="input-row" @submit.prevent="submit">
+    <button
+      type="button"
+      class="mic-btn"
+      :class="{ recording: isRecording }"
+      :disabled="disabled || isTranscribing"
+      :title="isRecording ? '停止錄音' : '語音輸入'"
+      @click="toggleRecording"
+    >
+      {{ isTranscribing ? "⏳" : isRecording ? "⏹" : "🎤" }}
+    </button>
     <textarea
       v-model="text"
       :disabled="disabled"
@@ -34,6 +93,7 @@ function onKeydown(e: KeyboardEvent) {
       {{ disabled ? "思考中..." : "送出" }}
     </button>
   </form>
+  <div v-if="micError" class="mic-error">⚠️ {{ micError }}</div>
 </template>
 
 <style scoped>
@@ -69,5 +129,30 @@ button {
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.mic-btn {
+  min-width: 44px;
+  padding: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 1.1rem;
+}
+.mic-btn.recording {
+  background: #e5484d;
+  border-color: #e5484d;
+  color: #fff;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.6;
+  }
+}
+.mic-error {
+  padding: 0 12px 10px;
+  font-size: 0.78rem;
+  color: #e5484d;
+  background: var(--panel-bg);
 }
 </style>

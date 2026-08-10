@@ -1,7 +1,16 @@
-from datetime import date
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Date, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBEDDING_DIM = 768  # nomic-embed-text output dimension
@@ -34,6 +43,23 @@ class Motherboard(Base):
     documents: Mapped[list["KBDocument"]] = relationship(back_populates="motherboard")
 
 
+class UploadedFile(Base):
+    """Metadata for a file uploaded via the knowledge-base ingestion pipeline."""
+
+    __tablename__ = "uploaded_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    filename: Mapped[str] = mapped_column(String(260))
+    content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="processing")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    documents: Mapped[list["KBDocument"]] = relationship(back_populates="uploaded_file")
+
+
 class KBDocument(Base):
     """Chunks of product-knowledge text used for RAG (semantic search)."""
 
@@ -41,9 +67,43 @@ class KBDocument(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     motherboard_id: Mapped[int | None] = mapped_column(ForeignKey("motherboards.id"), nullable=True)
+    uploaded_file_id: Mapped[int | None] = mapped_column(
+        ForeignKey("uploaded_files.id", ondelete="CASCADE"), nullable=True
+    )
     title: Mapped[str] = mapped_column(String(200))
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
     doc_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
 
     motherboard: Mapped["Motherboard | None"] = relationship(back_populates="documents")
+    uploaded_file: Mapped["UploadedFile | None"] = relationship(back_populates="documents")
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), default="新對話")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan"
+    )
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))
+    content: Mapped[str] = mapped_column(Text, default="")
+    steps: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")

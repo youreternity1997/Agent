@@ -11,3 +11,19 @@ python-multipart==0.0.9
 PyYAML==6.0.2
 python-dotenv==1.0.1
 ddgs==9.14.4
+
+# Hardware status (/ws/system)
+psutil>=6.0
+nvidia-ml-py>=12.0  # GPU stats only - safe to be absent/fail on non-NVIDIA hosts
+
+# Voice input (local speech-to-text)
+faster-whisper>=1.0
+
+# File upload -> chunk -> vector ingestion
+# (loose-pinned rather than exact - core and readers-file need to resolve to
+# a mutually compatible pair, and pip is better placed to pick that than a
+# hand-picked pair of exact versions)
+llama-index-core>=0.12,<0.13
+llama-index-readers-file>=0.4,<0.5
+pypdf>=5.0
+python-docx>=1.1

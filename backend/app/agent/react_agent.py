@@ -14,7 +14,7 @@ from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack
 from typing import Any
 
-from app.agent.prompts import build_system_prompt, build_user_prompt
+from app.agent.prompts import build_history_block, build_system_prompt, build_user_prompt
 from app.core.config import get_settings
 from app.core.llm import LLMError, chat_stream
 from app.mcp_client.client import call_mcp_tool, mcp_session
@@ -82,8 +82,10 @@ async def run_react(
     question: str,
     selected_tools: list[str],
     skill_id: str | None,
+    history: list[dict] | None = None,
 ) -> AsyncGenerator[dict, None]:
     skill = get_skill(skill_id)
+    history_block = build_history_block(history or [])
     stack = AsyncExitStack()
     session = None
     tool_descs: list[dict] = []
@@ -107,7 +109,7 @@ async def run_react(
         scratchpad = ""
 
         for step in range(1, settings.max_react_steps + 1):
-            user_prompt = build_user_prompt(question, scratchpad)
+            user_prompt = build_user_prompt(question, scratchpad, history_block)
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

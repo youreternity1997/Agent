@@ -93,6 +93,8 @@ python scripts/seed_data.py
 
 複製 `.env.example` 為 `.env`，依需要調整（`web_search` 工具透過 DuckDuckGo 運作，不需要額外的 API Key）。
 
+語音輸入功能（faster-whisper）首次執行時會自動下載模型權重（預設 `base`，可用 `WHISPER_MODEL_SIZE` 調整），需要網路連線，行為類似 `ollama pull`。
+
 ### 5. 啟動後端
 
 ```powershell

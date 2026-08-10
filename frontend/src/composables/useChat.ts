@@ -1,4 +1,5 @@
 export type ChatEvent =
+  | { type: "meta"; user_message_id?: number; assistant_message_id?: number }
   | { type: "delta"; content: string; step: number }
   | { type: "thought"; content: string; step: number }
   | { type: "action"; tool: string; input: Record<string, unknown>; step: number }
@@ -9,6 +10,7 @@ export type ChatEvent =
 
 interface StreamChatParams {
   message: string;
+  conversationId: number;
   tools: string[];
   skill: string | null;
   signal?: AbortSignal;
@@ -21,6 +23,7 @@ interface StreamChatParams {
  */
 export async function* streamChat({
   message,
+  conversationId,
   tools,
   skill,
   signal,
@@ -28,7 +31,7 @@ export async function* streamChat({
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, tools, skill }),
+    body: JSON.stringify({ message, conversation_id: conversationId, tools, skill }),
     signal,
   });
 

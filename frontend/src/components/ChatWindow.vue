@@ -2,7 +2,13 @@
 import { nextTick, ref, watch } from "vue";
 import type { ChatMessage } from "../types";
 
-const props = defineProps<{ messages: ChatMessage[] }>();
+const props = defineProps<{
+  messages: ChatMessage[];
+  loading?: boolean;
+  hasMore?: boolean;
+  loadingOlder?: boolean;
+}>();
+const emit = defineEmits<{ loadOlder: []; deleteMessage: [id: number] }>();
 
 const scrollRef = ref<HTMLElement | null>(null);
 
@@ -13,6 +19,12 @@ watch(
     scrollRef.value?.scrollTo({ top: scrollRef.value.scrollHeight, behavior: "smooth" });
   },
 );
+
+function handleDelete(msg: ChatMessage) {
+  if (!msg.id) return;
+  if (!confirm("刪除這則訊息？")) return;
+  emit("deleteMessage", msg.id);
+}
 
 function stepLabel(kind: string) {
   switch (kind) {
@@ -32,12 +44,28 @@ function stepLabel(kind: string) {
 
 <template>
   <div ref="scrollRef" class="chat-window">
-    <div v-if="messages.length === 0" class="empty-hint">
+    <div v-if="hasMore" class="load-older">
+      <button type="button" :disabled="loadingOlder" @click="emit('loadOlder')">
+        {{ loadingOlder ? "載入中..." : "載入更多歷史" }}
+      </button>
+    </div>
+
+    <div v-if="loading" class="empty-hint">載入對話中...</div>
+    <div v-else-if="messages.length === 0" class="empty-hint">
       👋 你好，我是技嘉主機板 AI 助理。左側可勾選要啟用的工具與 Skill，接著在下方輸入問題開始對話。
     </div>
 
-    <div v-for="(msg, i) in messages" :key="i" class="msg-row" :class="msg.role">
+    <div v-for="(msg, i) in messages" :key="msg.id ?? i" class="msg-row" :class="msg.role">
       <div class="bubble">
+        <button
+          v-if="msg.id"
+          class="msg-delete"
+          type="button"
+          title="刪除這則訊息"
+          @click="handleDelete(msg)"
+        >
+          🗑
+        </button>
         <template v-if="msg.role === 'user'">
           {{ msg.content }}
         </template>
@@ -90,13 +118,56 @@ function stepLabel(kind: string) {
 .msg-row.assistant {
   justify-content: flex-start;
 }
+.load-older {
+  display: flex;
+  justify-content: center;
+}
+.load-older button {
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.load-older button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.load-older button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .bubble {
+  position: relative;
   max-width: 720px;
   border-radius: 12px;
   padding: 12px 14px;
   font-size: 0.92rem;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+.msg-delete {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: opacity 0.15s;
+}
+.bubble:hover .msg-delete {
+  opacity: 0.6;
+}
+.msg-delete:hover {
+  opacity: 1 !important;
+  background: rgba(0, 0, 0, 0.15);
 }
 .msg-row.user .bubble {
   background: var(--accent);

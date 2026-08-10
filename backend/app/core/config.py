@@ -19,6 +19,21 @@ class Settings(BaseSettings):
 
     # Agent
     max_react_steps: int = 6
+    llm_context_window_messages: int = 20
+    max_stored_messages_per_conversation: int = 500
+
+    # Voice input (local Whisper transcription)
+    whisper_model_size: str = "base"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+
+    # Hardware status WebSocket
+    system_ws_interval_seconds: float = 2.0
+
+    # File upload -> LlamaIndex ingestion
+    upload_chunk_size: int = 800
+    upload_chunk_overlap: int = 100
+    upload_max_file_size_mb: int = 20
 
     # CORS
     cors_origins: str = "http://localhost:5173"
