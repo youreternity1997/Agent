@@ -1,39 +1,41 @@
 # GIGABYTE AI Agent
 
-技嘉 (GIGABYTE) 主機板產品資料 AI 助理。使用**本地 4B 等級 LLM**（透過 Ollama）驅動 **ReAct** 推理迴圈，
+技嘉 (GIGABYTE) 主機板產品資料 AI 助理。使用**本地 8B 等級 LLM（int4 量化，vLLM AsyncLLMEngine 內嵌於後端、支援多人並發非同步推論）**驅動 **ReAct** 推理迴圈，
 可勾選啟用 **MCP 工具**（網路搜尋 / RAG 向量檢索 / 資料庫查詢），並可切換不同「Skill」（領域知識提示詞模組）。
 
 ## 架構總覽
 
 ```
-┌─────────────────┐      SSE (逐步驟串流)      ┌───────────────────────┐
-│  Vue 3 前端      │ ───────────────────────▶ │  FastAPI 後端           │
-│  - 勾選 MCP 工具  │ ◀─────────────────────── │  - ReAct Agent Loop     │
-│  - 選擇 Skill    │      Thought/Action/...   │  - MCP Client           │
-└─────────────────┘                            └──────────┬─────────────┘
-                                                            │ stdio (MCP)
-                                                            ▼
-                                                ┌───────────────────────┐
-                                                │  MCP Tool Server        │
-                                                │  - web_search (DuckDuckGo)│
-                                                │  - rag_search (pgvector)│
-                                                │  - db_query (SQL)       │
-                                                └──────────┬─────────────┘
+┌─────────────────┐      SSE (逐步驟串流)      ┌───────────────────────────────┐
+│  Vue 3 前端      │ ───────────────────────▶ │  FastAPI 後端                   │
+│  - 勾選 MCP 工具  │ ◀─────────────────────── │  - ReAct Agent Loop             │
+│  - 選擇 Skill    │      Thought/Action/...   │  - MCP Client                   │
+└─────────────────┘                            │  - vLLM AsyncLLMEngine (內嵌)   │
+                                                │    Qwen3-8B-AWQ，continuous     │
+                                                │    batching，多人並發非同步推論 │
+                                                └──────────┬───────────┬─────────┘
+                                                    stdio (MCP)         │ HTTP
+                                                            ▼           ▼
+                                                ┌───────────────────┐ ┌────────────────┐
+                                                │  MCP Tool Server    │ │ Ollama (Embedding)│
+                                                │  - web_search       │ │ nomic-embed-text  │
+                                                │  - rag_search       │ └────────────────┘
+                                                │  - db_query         │
+                                                └──────────┬─────────┘
                                                             │
-                                        ┌───────────────────┴────────────────┐
-                                        ▼                                    ▼
-                              ┌──────────────────┐                ┌──────────────────┐
-                              │ PostgreSQL+pgvector│                │ Ollama (本地LLM)   │
-                              │ motherboards       │                │ qwen3:4b 等        │
-                              │ kb_documents(向量) │                │ nomic-embed-text   │
-                              └──────────────────┘                └──────────────────┘
+                                                            ▼
+                                                ┌──────────────────────┐
+                                                │ PostgreSQL + pgvector  │
+                                                │ motherboards           │
+                                                │ kb_documents (向量)    │
+                                                └──────────────────────┘
 ```
 
 ## 技術選型
 
 - **後端**: Python 3.11 + FastAPI，ReAct 迴圈為手寫的 Thought/Action/Action Input/Observation 文字解析（不依賴原生 function-calling，因為小型本地模型對 function-calling 支援不穩定）
-- **LLM**: 本地模型，透過 [Ollama](https://ollama.com) 提供，預設 `qwen3:4b`（可換成任何 ~3B–4B 的 instruct 模型，如 `qwen2.5:3b`、`llama3.2:3b`、`phi3.5`、`gemma2:2b`）
-- **Embedding**: Ollama `nomic-embed-text`（本地產生向量，供 RAG 使用）
+- **LLM**: [vLLM](https://github.com/vllm-project/vllm) 的 `AsyncLLMEngine` 直接內嵌在後端程式裡（不透過額外的 HTTP server），預設模型 `Qwen/Qwen3-8B-AWQ`（8B 參數、AWQ int4 量化，首次啟動會自動從 Hugging Face 下載並快取）。`AsyncLLMEngine` 內建 continuous batching，多個使用者同時對話時的請求會被引擎自動合併批次推論，不會互相卡住；可透過 `VLLM_MODEL`／`VLLM_QUANTIZATION` 換成其他 vLLM 支援的模型
+- **Embedding**: 獨立的 Ollama 服務提供 `nomic-embed-text`（本地產生向量，供 RAG 使用；embedding 模型體積小、不需要 vLLM 的批次推論能力，維持用 Ollama 服務較單純）
 - **MCP**: 使用官方 `mcp` Python SDK（`FastMCP`）實作一個 stdio MCP Server，暴露 3 個工具；後端以 MCP Client 連線呼叫
 - **向量資料庫**: PostgreSQL + `pgvector` extension
 - **網路搜尋**: [DuckDuckGo](https://duckduckgo.com)（透過 `ddgs` 套件，免 API Key 即可使用）
@@ -64,13 +66,16 @@ docker-compose.yml
 
 ## 快速開始
 
-### 1. 安裝並啟動 Ollama，下載模型
+### 1. 安裝並啟動 Ollama（僅用於 Embedding 模型）
 
 ```powershell
 # 安裝 Ollama: https://ollama.com/download
-ollama pull qwen3:4b
 ollama pull nomic-embed-text
 ```
+
+生成用的 LLM（`Qwen/Qwen3-8B-AWQ`）不再透過 Ollama，而是由後端程式內嵌的 vLLM `AsyncLLMEngine`
+在啟動時自動從 Hugging Face 下載並載入（需要 NVIDIA GPU + 足夠 VRAM，且需要能連上 Hugging Face
+的網路環境；首次啟動下載約 8GB，之後會快取在本機不必重複下載）。
 
 ### 2. 啟動 PostgreSQL (pgvector)
 
@@ -112,14 +117,17 @@ npm run dev
 
 瀏覽器打開 `http://localhost:5173`，即可在畫面上勾選要啟用的 MCP 工具、選擇 Skill，並開始對話。
 
-## Docker Compose 一鍵啟動（含 Ollama）
+## Docker Compose 一鍵啟動（含 Ollama Embedding 服務）
 
 ```powershell
 docker compose up -d --build
-docker exec -it gigabyte-ollama ollama pull qwen3:4b
 docker exec -it gigabyte-ollama ollama pull nomic-embed-text
 docker exec -it gigabyte-backend python scripts/seed_data.py
 ```
+
+`backend` 容器啟動時會自動下載並載入 `Qwen/Qwen3-8B-AWQ`（vLLM 內嵌引擎），可用
+`docker logs -f gigabyte-backend` 觀察下載/載入進度，或用 `curl http://localhost:8000/api/health`
+確認 `llm_ready` 是否為 `true`。下載的權重會存在 `gigabyte_hf_cache` volume，重建容器不會重新下載。
 
 ## ReAct 迴圈說明
 

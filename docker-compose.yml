@@ -39,24 +39,59 @@ services:
     build: ./backend
     container_name: gigabyte-backend
     restart: unless-stopped
+    # Run tini as PID 1 instead of uvicorn directly: this container's PID 1
+    # gets a permanently broken NVML handle under Docker Desktop/WSL2 GPU
+    # passthrough (see routes_ws_system.py's _gpu_status comment) - vLLM's
+    # own in-process pynvml.nvmlInit() call during model-architecture
+    # inspection hits the same bug otherwise ("NVMLError_NotSupported").
+    init: true
     depends_on:
       db:
         condition: service_healthy
       ollama:
         condition: service_started
     environment:
+      VLLM_MODEL: Qwen/Qwen3-8B-AWQ
+      VLLM_QUANTIZATION: awq
+      VLLM_GPU_MEMORY_UTILIZATION: 0.85
+      VLLM_ENFORCE_EAGER: true
+      # This laptop's RTX 5060 is sm_120 (Blackwell) - FlashAttention's
+      # prebuilt kernels hang on it during model load. Triton's attention
+      # backend compiles at runtime for whatever architecture it finds, so
+      # it isn't tied to a fixed set of precompiled SM targets. vLLM 0.27.1
+      # has no VLLM_ATTENTION_BACKEND env var (removed upstream) - this is
+      # read by config.py and threaded into AsyncEngineArgs in llm.py instead.
+      VLLM_ATTENTION_BACKEND: TRITON_ATTN
+      # Docker Desktop/WSL2 disables pinned memory by default, which vLLM's
+      # v2 GPU model runner needs for its UVA buffers - without this it fails
+      # to start with "RuntimeError: UVA is not available".
+      VLLM_WSL2_ENABLE_PIN_MEMORY: 1
+      # flashinfer's top_k/top_p sampler JIT-compiles a CUDA kernel via nvcc
+      # at first use - this image has no CUDA toolkit (only the driver's
+      # libcuda.so via GPU passthrough), so that JIT fails with "Could not
+      # find nvcc". Falling back to vLLM's native PyTorch sampler avoids it.
+      VLLM_USE_FLASHINFER_SAMPLER: 0
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: qwen3:4b-instruct
       OLLAMA_EMBED_MODEL: nomic-embed-text
       DATABASE_URL: postgresql+asyncpg://gigabyte:gigabyte@db:5432/gigabyte_agent
       DATABASE_URL_SYNC: postgresql://gigabyte:gigabyte@db:5432/gigabyte_agent
       MAX_REACT_STEPS: 6
       LLM_TEMPERATURE: 0.2
-      LLM_NUM_CTX: 8192
+      # This laptop's RTX 5060 only has 8GB VRAM - at gpu_memory_utilization
+      # 0.85, Qwen3-8B-AWQ's weights leave just ~0.66GiB for KV cache, too
+      # little for an 8192-token context (needs 1.12GiB; vLLM's own error
+      # put the ceiling at ~4800). 4096 fits with headroom to spare.
+      LLM_NUM_CTX: 4096
+      LLM_MAX_TOKENS: 2048
       CORS_ORIGINS: http://localhost:5173
     ports:
       - "8000:8000"
-    # GPU passthrough for the /ws/system hardware panel (pynvml)
+    volumes:
+      # Persist the downloaded HF model weights (~8GB) across container
+      # restarts/rebuilds instead of re-downloading every time.
+      - gigabyte_hf_cache:/root/.cache/huggingface
+    # GPU passthrough: vLLM's AsyncLLMEngine now loads the generation model
+    # directly into this container's GPU (also used by /ws/system's pynvml)
     deploy:
       resources:
         reservations:
@@ -77,3 +112,4 @@ services:
 volumes:
   gigabyte_db_data:
   gigabyte_ollama_data:
+  gigabyte_hf_cache:

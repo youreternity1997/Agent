@@ -1,3 +1,4 @@
-PowerShell 確認目前已下載的模型與 backend 使用的模型設定
+PowerShell 確認目前的模型設定與 vLLM 引擎是否就緒
+docker exec gigabyte-backend printenv VLLM_MODEL
+curl http://localhost:8000/api/health
 docker exec gigabyte-ollama ollama list
-docker exec gigabyte-backend printenv OLLAMA_MODEL

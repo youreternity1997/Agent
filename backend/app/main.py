@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,11 +10,24 @@ from app.api.routes_skills import router as skills_router
 from app.api.routes_tools import router as tools_router
 from app.api.routes_transcribe import router as transcribe_router
 from app.api.routes_ws_system import router as ws_system_router
+from app.core import llm
 from app.core.config import get_settings
 
 settings = get_settings()
 
-app = FastAPI(title="GIGABYTE AI Agent", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        await llm.init_engine()
+    except llm.LLMError as exc:
+        # Don't crash-loop the whole container over a slow/failed model load -
+        # surface it per-request instead (see llm._require_engine).
+        print(f"[startup] vLLM 引擎初始化失敗：{exc}")
+    yield
+
+
+app = FastAPI(title="GIGABYTE AI Agent", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,4 +48,4 @@ app.include_router(ws_system_router)
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "model": settings.ollama_model}
+    return {"status": "ok", "model": settings.vllm_model, "llm_ready": llm.is_ready()}

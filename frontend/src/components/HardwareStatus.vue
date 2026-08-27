@@ -19,14 +19,6 @@ function onDocumentClick(e: MouseEvent) {
 
 onMounted(() => document.addEventListener("click", onDocumentClick));
 onBeforeUnmount(() => document.removeEventListener("click", onDocumentClick));
-
-function formatExpiry(iso: string | null): string {
-  if (!iso) return "--";
-  const diffMs = new Date(iso).getTime() - Date.now();
-  if (diffMs <= 0) return "即將卸載";
-  const mins = Math.round(diffMs / 60000);
-  return mins < 60 ? `${mins} 分鐘後卸載` : `${Math.round(mins / 60)} 小時後卸載`;
-}
 </script>
 
 <template>
@@ -54,11 +46,10 @@ function formatExpiry(iso: string | null): string {
           <span class="chip-value">--</span>
         </div>
 
-        <div class="chip model" :title="status.ollama.configured_model">
+        <div class="chip model" :title="status.llm.model">
           <span class="chip-label">模型</span>
           <span class="chip-value">
-            <span v-if="!status.ollama.reachable" class="warn">無法連線</span>
-            <span v-else-if="status.ollama.loaded_models.length === 0">閒置中</span>
+            <span v-if="!status.llm.ready" class="warn">尚未就緒</span>
             <span v-else>推論中</span>
           </span>
         </div>
@@ -128,23 +119,27 @@ function formatExpiry(iso: string | null): string {
       </section>
 
       <section class="hw-section">
-        <h4>Ollama 模型狀態</h4>
+        <h4>LLM 推論引擎 (vLLM)</h4>
+        <div class="kv-grid">
+          <span>狀態</span>
+          <span :class="{ warn: !status.llm.ready }">
+            {{ status.llm.ready ? "已載入" : "尚未就緒" }}
+          </span>
+          <span>模型</span><span>{{ status.llm.model }}</span>
+          <span>量化</span><span>{{ status.llm.quantization }}</span>
+          <span>Context 長度</span><span>{{ status.llm.max_model_len }}</span>
+        </div>
+      </section>
+
+      <section class="hw-section">
+        <h4>Embedding 模型 (Ollama)</h4>
         <div class="kv-grid">
           <span>連線</span>
-          <span :class="{ warn: !status.ollama.reachable }">
-            {{ status.ollama.reachable ? "已連線" : "無法連線" }}
+          <span :class="{ warn: !status.embedding.reachable }">
+            {{ status.embedding.reachable ? "已連線" : "無法連線" }}
           </span>
-          <span>設定的模型</span><span>{{ status.ollama.configured_model }}</span>
-          <span>Embedding 模型</span><span>{{ status.ollama.embed_model }}</span>
+          <span>模型</span><span>{{ status.embedding.model }}</span>
         </div>
-        <div v-if="status.ollama.loaded_models.length" class="loaded-models">
-          <div v-for="m in status.ollama.loaded_models" :key="m.name" class="loaded-model-row">
-            <span class="model-name">{{ m.name }}</span>
-            <span>{{ m.size_gb.toFixed(1) }} GB · VRAM {{ m.vram_gb.toFixed(1) }} GB</span>
-            <span class="expiry">{{ formatExpiry(m.expires_at) }}</span>
-          </div>
-        </div>
-        <p v-else class="hint">目前沒有已載入記憶體的模型（閒置中）。</p>
       </section>
     </div>
   </div>
@@ -292,27 +287,6 @@ function formatExpiry(iso: string | null): string {
 .hint {
   margin: 4px 0 0;
   font-size: 0.76rem;
-  color: var(--text-muted);
-}
-.loaded-models {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.loaded-model-row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 0.76rem;
-  padding: 6px 8px;
-  background: var(--bg);
-  border-radius: 6px;
-}
-.model-name {
-  font-weight: 700;
-}
-.expiry {
   color: var(--text-muted);
 }
 </style>

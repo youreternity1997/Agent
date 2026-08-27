@@ -1,12 +1,5 @@
 import { onMounted, onUnmounted, ref } from "vue";
 
-export interface OllamaLoadedModel {
-  name: string;
-  size_gb: number;
-  vram_gb: number;
-  expires_at: string | null;
-}
-
 export interface SystemStatus {
   cpu: {
     percent: number;
@@ -41,11 +34,16 @@ export interface SystemStatus {
           fan_percent: number | null;
         }>;
       };
-  ollama: {
-    configured_model: string;
-    embed_model: string;
+  llm: {
+    engine: string;
+    model: string;
+    quantization: string;
+    max_model_len: number;
+    ready: boolean;
+  };
+  embedding: {
+    model: string;
     base_url: string;
-    loaded_models: OllamaLoadedModel[];
     reachable: boolean;
   };
 }

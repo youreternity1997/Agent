@@ -7,12 +7,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # LLM (local, via Ollama)
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3:4b-instruct"
-    ollama_embed_model: str = "nomic-embed-text"
+    # LLM (local, in-process vLLM AsyncLLMEngine)
+    vllm_model: str = "Qwen/Qwen3-8B-AWQ"
+    vllm_quantization: str = "awq"
+    vllm_gpu_memory_utilization: float = 0.85
+    # Skips vLLM's torch.compile optimization path. That path pulls in
+    # flashinfer's multi-GPU AllReduce fusion pass, which is both irrelevant
+    # for our single-GPU setup and currently broken on Python 3.11
+    # (TypeError: type 'array.array' is not subscriptable).
+    vllm_enforce_eager: bool = True
+    # vLLM has no VLLM_ATTENTION_BACKEND env var as of 0.27.1 (removed in
+    # favor of the --attention-backend CLI flag / AsyncEngineArgs kwarg) -
+    # setting it as a raw environment variable is a silent no-op, so it has
+    # to be threaded through explicitly in llm.py's AsyncEngineArgs call.
+    vllm_attention_backend: str | None = None
     llm_temperature: float = 0.2
     llm_num_ctx: int = 8192
+    llm_max_tokens: int = 2048
+
+    # Embedding (local, via Ollama - separate small model, not served by vLLM)
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_embed_model: str = "nomic-embed-text"
 
     # Database
     database_url: str = "postgresql+asyncpg://gigabyte:gigabyte@localhost:5432/gigabyte_agent"

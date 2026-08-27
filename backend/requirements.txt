@@ -1,21 +1,22 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-httpx==0.28.1
-pydantic==2.10.3
-pydantic-settings==2.6.1
-sqlalchemy[asyncio]==2.0.35
-asyncpg==0.29.0
-pgvector==0.3.5
-mcp==1.2.0
-python-multipart==0.0.9
-PyYAML==6.0.2
-python-dotenv==1.0.1
-ddgs==9.14.4
+fastapi>=0.133.0,<0.137.0
+uvicorn[standard]>=0.30.6
+httpx>=0.28.1
+pydantic>=2.12.0
+pydantic-settings>=2.6.1
+sqlalchemy[asyncio]>=2.0.35
+asyncpg>=0.29.0
+pgvector>=0.3.5
+mcp>=1.2.0,<2.0.0  # v2 renamed FastMCP -> MCPServer; app/mcp_server/server.py still uses the v1 API
+python-multipart>=0.0.18
+PyYAML>=6.0.2
+python-dotenv>=1.0.1
+ddgs>=9.14.4
 docx2txt
---extra-index-url https://download.pytorch.org/whl/cu130
-torch==2.11.0
-torchvision==0.26.0
-torchaudio==2.11.0
+
+# Local chat/generation LLM (in-process async engine, continuous batching
+# for concurrent multi-user inference). Pulls its own compatible torch/CUDA
+# wheels - don't pin torch separately alongside this.
+vllm==0.27.1
 
 # Hardware status (/ws/system)
 psutil>=6.0

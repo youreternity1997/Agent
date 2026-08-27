@@ -1,5 +1,5 @@
 """WebSocket that periodically pushes host hardware status (CPU/RAM/GPU) and
-the local Ollama model status, so the frontend sidebar can show it live.
+the local LLM/embedding model status, so the frontend sidebar can show it live.
 
 This is a separate channel from the chat SSE stream (/api/chat) - it never
 touches the ReAct loop.
@@ -12,6 +12,7 @@ import httpx
 import psutil
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.core import llm
 from app.core.config import get_settings
 
 router = APIRouter(tags=["system"])
@@ -111,29 +112,30 @@ async def _gpu_status() -> dict:
     return {"available": True, **primary, "devices": devices}
 
 
-async def _ollama_status() -> dict:
+async def _llm_status() -> dict:
+    """The generation engine now lives in-process (vLLM), so there's no
+    remote server to ping - just report the configured model and whether
+    init_engine() has finished loading it."""
+    return {
+        "engine": "vllm",
+        "model": settings.vllm_model,
+        "quantization": settings.vllm_quantization,
+        "max_model_len": settings.llm_num_ctx,
+        "ready": llm.is_ready(),
+    }
+
+
+async def _embedding_status() -> dict:
     status = {
-        "configured_model": settings.ollama_model,
-        "embed_model": settings.ollama_embed_model,
+        "model": settings.ollama_embed_model,
         "base_url": settings.ollama_base_url,
-        "loaded_models": [],
         "reachable": False,
     }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{settings.ollama_base_url}/api/ps")
             resp.raise_for_status()
-            data = resp.json()
             status["reachable"] = True
-            status["loaded_models"] = [
-                {
-                    "name": m.get("name"),
-                    "size_gb": round(m.get("size", 0) / (1024**3), 2),
-                    "vram_gb": round(m.get("size_vram", 0) / (1024**3), 2),
-                    "expires_at": m.get("expires_at"),
-                }
-                for m in data.get("models", [])
-            ]
     except Exception:  # noqa: BLE001 - Ollama offline shouldn't kill the socket
         pass
     return status
@@ -148,7 +150,8 @@ async def system_status_ws(websocket: WebSocket):
                 "cpu": _cpu_status(),
                 "memory": _memory_status(),
                 "gpu": await _gpu_status(),
-                "ollama": await _ollama_status(),
+                "llm": await _llm_status(),
+                "embedding": await _embedding_status(),
             }
             await websocket.send_json(payload)
             await asyncio.sleep(settings.system_ws_interval_seconds)
