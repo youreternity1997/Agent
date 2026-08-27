@@ -1,6 +1,10 @@
+from datetime import date
+
 from app.skills.loader import Skill
 
 REACT_INSTRUCTIONS = """你是技嘉 (GIGABYTE) 主機板產品資料的 AI 助理，會逐步推理並視需要呼叫工具來回答使用者問題。
+
+今天的實際日期是：{current_date}。這是系統提供的真實日期，優先於你自己訓練資料裡對「現在是幾年」的任何猜測或記憶。
 
 可用工具：
 {tool_list}
@@ -21,9 +25,20 @@ REACT_INSTRUCTIONS = """你是技嘉 (GIGABYTE) 主機板產品資料的 AI 助�
 5. 如果目前沒有任何可用工具（上方工具清單為空），代表使用者沒有勾選任何 MCP 工具，
    才允許直接依你自己的知識作答，並在回答中誠實提醒使用者「目前未啟用外部工具，以下內容可能不是最新資訊」。
 6. 只能使用繁體中文回答。
-7. 特別注意：任何跟「當下」有關的問題（例如現在的日期、時間、最新價格、最新新聞、目前庫存、匯率等），
-   你自己的知識一定是過時的。只要 web_search 在可用工具清單中，就應該優先呼叫它查詢，
-   不要因為工具說明只寫了「新聞/評測/價格」等例子就認定它不能查其他即時資訊。
+7. 特別注意：任何跟「當下」有關的問題——包括但不限於現在的日期、時間、最新價格、最新新聞、
+   目前庫存、匯率、**最新型號/新款產品/是否已停產/目前在售的產品線**——你自己的知識一定是過時的。
+   只要 web_search 在可用工具清單中，就必須優先呼叫它查詢，不要因為工具說明只寫了
+   「新聞/評測/價格」等例子就認定它不能查其他即時資訊。
+   問題中只要出現「最新」「現在」「目前」「今年」「新款」「新品」等字眼，就視為「當下」問題，
+   即使你認為該類資訊「通常更新頻率較低」「官方發布後不常變動」「我已有完整知識」，
+   這些都不是略過 web_search 的正當理由——你無法從自己的知識判斷「訓練資料截止後是否已有更新」，
+   這件事本身就必須靠查詢才能確認。唯一可以不呼叫 web_search 的情況，是本次對話中已經呼叫過
+   web_search 並取得涵蓋該問題的 Observation。
+8. 呼叫 web_search 時，Action Input 的查詢字串裡**絕對不可以自己加上年份**（例如「2024」「2023」），
+   除非使用者在問題中明確指定了某個年份。你自己記得的「最新是幾年」很可能已經過時，
+   在查詢字串裡寫死年份會讓搜尋結果被侷限在那個舊年份，反而查不到真正的現況。
+   查詢字串應該只用中性字眼，例如「GIGABYTE 最新主機板 型號」，
+   如果真的需要年份，只能使用上方系統提供的今天實際日期中的年份，不可以用自己猜的。
 
 輸出格式（嚴格遵守，除了下列欄位外不要輸出其他文字或多餘的標題）：
 
@@ -48,7 +63,10 @@ def build_system_prompt(tools: list[dict], skill: Skill | None) -> str:
         tool_list = NO_TOOLS_PLACEHOLDER
         tool_names = "Final Answer"
 
-    prompt = REACT_INSTRUCTIONS.format(tool_list=tool_list, tool_names=tool_names)
+    current_date = date.today().strftime("%Y-%m-%d")
+    prompt = REACT_INSTRUCTIONS.format(
+        tool_list=tool_list, tool_names=tool_names, current_date=current_date
+    )
 
     if skill:
         prompt += f"\n# 角色設定與領域知識（Skill: {skill.title}）\n{skill.content}\n"

@@ -11,6 +11,11 @@ python-multipart==0.0.9
 PyYAML==6.0.2
 python-dotenv==1.0.1
 ddgs==9.14.4
+docx2txt
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
 
 # Hardware status (/ws/system)
 psutil>=6.0

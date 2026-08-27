@@ -17,13 +17,10 @@ from app.core.config import get_settings
 router = APIRouter(tags=["system"])
 settings = get_settings()
 
-try:
-    import pynvml
-
-    pynvml.nvmlInit()
-    _NVML_AVAILABLE = True
-except Exception:  # noqa: BLE001 - no NVIDIA GPU/driver/pynvml, degrade gracefully
-    _NVML_AVAILABLE = False
+_NVIDIA_SMI_FIELDS = (
+    "name,utilization.gpu,utilization.memory,memory.total,memory.used,"
+    "temperature.gpu,power.draw,fan.speed"
+)
 
 
 def _cpu_status() -> dict:
@@ -53,48 +50,65 @@ def _memory_status() -> dict:
     }
 
 
-def _gpu_status() -> dict:
-    if not _NVML_AVAILABLE:
-        return {"available": False}
+def _parse_float(raw: str) -> float | None:
+    raw = raw.strip()
     try:
-        device_count = pynvml.nvmlDeviceGetCount()
-        devices = []
-        for i in range(device_count):
-            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            name = pynvml.nvmlDeviceGetName(handle)
-            if isinstance(name, bytes):
-                name = name.decode()
+        return float(raw)
+    except ValueError:
+        return None  # e.g. "[N/A]" when a metric isn't supported on this GPU
 
-            temperature = None
-            with suppress(Exception):
-                temperature = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
 
-            power_w = None
-            with suppress(Exception):
-                power_w = round(pynvml.nvmlDeviceGetPowerUsage(handle) / 1000, 1)
+async def _gpu_status() -> dict:
+    """Shell out to `nvidia-smi` fresh on every call rather than keeping an
+    NVML handle alive in this long-lived process.
 
-            fan_percent = None
-            with suppress(Exception):
-                fan_percent = pynvml.nvmlDeviceGetFanSpeed(handle)
-
-            devices.append(
-                {
-                    "name": name,
-                    "util_percent": util.gpu,
-                    "mem_util_percent": util.memory,
-                    "vram_total_gb": round(mem.total / (1024**3), 2),
-                    "vram_used_gb": round(mem.used / (1024**3), 2),
-                    "temperature_c": temperature,
-                    "power_w": power_w,
-                    "fan_percent": fan_percent,
-                }
-            )
-        primary = devices[0]
-        return {"available": True, **primary, "devices": devices}
-    except Exception:  # noqa: BLE001
+    In-process pynvml.nvmlInit() was found to permanently fail for this
+    process specifically under Docker Desktop/WSL2 GPU passthrough (the
+    nvidia-container-runtime hook that wraps the container's PID 1 leaves its
+    NVML handle broken), even though a brand-new process in the same
+    container can always initialize NVML/nvidia-smi successfully. Spawning a
+    subprocess per query sidesteps that broken in-process state entirely.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "nvidia-smi",
+            f"--query-gpu={_NVIDIA_SMI_FIELDS}",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+    except (OSError, TimeoutError):  # nvidia-smi missing, or hung
         return {"available": False}
+
+    if proc.returncode != 0 or not stdout:
+        return {"available": False}
+
+    devices = []
+    for line in stdout.decode().strip().splitlines():
+        fields = [f.strip() for f in line.split(",")]
+        if len(fields) != 8:
+            continue
+        name, util_gpu, util_mem, mem_total, mem_used, temperature, power, fan = fields
+        mem_total_mib = _parse_float(mem_total)
+        mem_used_mib = _parse_float(mem_used)
+        devices.append(
+            {
+                "name": name,
+                "util_percent": _parse_float(util_gpu),
+                "mem_util_percent": _parse_float(util_mem),
+                "vram_total_gb": round(mem_total_mib / 1024, 2) if mem_total_mib is not None else None,
+                "vram_used_gb": round(mem_used_mib / 1024, 2) if mem_used_mib is not None else None,
+                "temperature_c": _parse_float(temperature),
+                "power_w": _parse_float(power),
+                "fan_percent": _parse_float(fan),
+            }
+        )
+
+    if not devices:
+        return {"available": False}
+    primary = devices[0]
+    return {"available": True, **primary, "devices": devices}
 
 
 async def _ollama_status() -> dict:
@@ -133,7 +147,7 @@ async def system_status_ws(websocket: WebSocket):
             payload = {
                 "cpu": _cpu_status(),
                 "memory": _memory_status(),
-                "gpu": _gpu_status(),
+                "gpu": await _gpu_status(),
                 "ollama": await _ollama_status(),
             }
             await websocket.send_json(payload)

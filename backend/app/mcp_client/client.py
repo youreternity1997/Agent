@@ -6,6 +6,7 @@ available tools (for the /api/tools endpoint) and to invoke whichever tools the
 user selected via the frontend checkboxes.
 """
 
+import os
 import sys
 from contextlib import asynccontextmanager
 
@@ -20,6 +21,12 @@ _SERVER_PARAMS = StdioServerParameters(
     command=sys.executable,
     args=["-m", "app.mcp_server.server"],
     cwd=str(settings.backend_root),
+    # mcp's stdio_client only forwards a small safe-var whitelist when env=None,
+    # which drops OLLAMA_BASE_URL / DATABASE_URL etc. set via docker-compose -
+    # the subprocess then falls back to Settings' localhost defaults and can't
+    # reach the ollama/db containers. This is a trusted in-process subprocess,
+    # so inherit the full environment instead.
+    env=dict(os.environ),
 )
 
 
