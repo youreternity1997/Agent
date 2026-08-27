@@ -35,6 +35,12 @@ _PRIMARY_PARAM = {
     "db_query": "keyword",
 }
 
+_NO_RESULT_MARKERS = ("沒有找到", "查無")
+
+
+def _looks_like_no_result(observation: str) -> bool:
+    return any(marker in observation for marker in _NO_RESULT_MARKERS)
+
 
 def _parse_llm_output(text: str) -> dict[str, Any]:
     thought_match = _THOUGHT_RE.search(text)
@@ -59,6 +65,22 @@ def _parse_llm_output(text: str) -> dict[str, Any]:
     return {"thought": thought, "final_answer": text.strip()}
 
 
+def _normalize_action_input(action: str, parsed: dict) -> dict:
+    """Repair a single wrong JSON key for the tool's primary parameter.
+
+    The model occasionally invents a plausible-but-wrong key (e.g. {"model": "..."}
+    for db_query's "keyword" param) even though it produced otherwise-valid JSON,
+    which would bypass the raw-text fallback below and fail tool-side validation.
+    Only remap when there's exactly one key and it isn't already the expected one,
+    so legitimate multi-param calls are left untouched.
+    """
+    primary = _PRIMARY_PARAM.get(action)
+    if primary and primary not in parsed and len(parsed) == 1:
+        ((only_key, only_value),) = parsed.items()
+        return {primary: only_value}
+    return parsed
+
+
 def _parse_action_input(action: str, raw_input: str) -> dict:
     # Trim anything after a clean JSON object if the model kept rambling.
     candidate = raw_input.strip()
@@ -68,7 +90,7 @@ def _parse_action_input(action: str, raw_input: str) -> dict:
     try:
         parsed = json.loads(candidate)
         if isinstance(parsed, dict):
-            return parsed
+            return _normalize_action_input(action, parsed)
     except (json.JSONDecodeError, ValueError):
         pass
 
@@ -96,7 +118,11 @@ async def run_react(
                 session = await stack.enter_async_context(mcp_session())
                 available = (await session.list_tools()).tools
                 tool_descs = [
-                    {"name": t.name, "description": t.description or ""}
+                    {
+                        "name": t.name,
+                        "description": t.description or "",
+                        "schema": t.inputSchema or {},
+                    }
                     for t in available
                     if t.name in selected_tools
                 ]
@@ -107,6 +133,8 @@ async def run_react(
         system_prompt = build_system_prompt(tool_descs, skill)
         enabled_names = {t["name"] for t in tool_descs}
         scratchpad = ""
+        last_action: str | None = None
+        last_action_failed = False
 
         for step in range(1, settings.max_react_steps + 1):
             user_prompt = build_user_prompt(question, scratchpad, history_block)
@@ -157,6 +185,16 @@ async def run_react(
                     )
                 except Exception as exc:  # noqa: BLE001
                     observation = f"工具執行時發生錯誤：{exc}"
+
+            this_action_failed = _looks_like_no_result(observation)
+            if action == last_action and last_action_failed and this_action_failed:
+                observation += (
+                    f"\n\n系統提示：你已經呼叫過「{action}」都查無資料，"
+                    "請不要再重複呼叫同一個工具（即使關鍵字寫法不同），"
+                    "請改用其他可用工具查詢，或直接依現有資訊給出 Final Answer 並誠實告知查不到。"
+                )
+            last_action = action
+            last_action_failed = this_action_failed
 
             yield {"type": "observation", "content": observation, "step": step}
 

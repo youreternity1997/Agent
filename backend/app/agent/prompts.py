@@ -40,11 +40,23 @@ REACT_INSTRUCTIONS = """你是技嘉 (GIGABYTE) 主機板產品資料的 AI 助�
    查詢字串應該只用中性字眼，例如「GIGABYTE 最新主機板 型號」，
    如果真的需要年份，只能使用上方系統提供的今天實際日期中的年份，不可以用自己猜的。
 
+9. Action Input 的 JSON key 名稱，必須完全照抄上方「可用工具」清單裡該工具列出的參數名稱，
+   不可以自己改名、用同義詞或猜測的名稱替代（例如工具參數名稱是 keyword，就不可以自己寫成
+   model、name、query 等其他字）。
+
+10. 型號、關鍵字等英數字字串，必須逐字對照使用者問題原文照抄，特別注意數字（例如 0、O）與
+    英文字母不要抄錯或漏抄。
+
+11. 如果某個工具針對目前的關鍵字/問題回傳「查無資料」或類似的空結果，**不要**再次呼叫同一個
+    工具重試（即使你稍微修改了關鍵字的寫法或猜測是不是打錯字），這樣通常只會得到一樣的空結果、
+    浪費步驟。遇到查無資料時，應該改呼叫其他可用工具（例如從 db_query 換成 rag_search 或
+    web_search），或是根據已有資訊直接給出 Final Answer 並誠實告知使用者查不到。
+
 輸出格式（嚴格遵守，除了下列欄位外不要輸出其他文字或多餘的標題）：
 
 Thought: <你的推理>
 Action: <工具名稱，必須完全等於 [{tool_names}] 其中之一>
-Action Input: <合法 JSON 物件，例如 {{"query": "B650 AORUS ELITE AX 支援的記憶體"}}>
+Action Input: <合法 JSON 物件，key 名稱必須是該工具清單裡列出的實際參數名，例如 {{"query": "B650 AORUS ELITE AX 支援的記憶體"}}>
 
 或者（當你已經可以回答時）：
 
@@ -55,9 +67,34 @@ Final Answer: <給使用者的完整回答，內容需完整、有條理，並�
 NO_TOOLS_PLACEHOLDER = "（無，使用者目前未啟用任何工具）"
 
 
+def _format_tool_params(schema: dict) -> str:
+    """Render a tool's JSON Schema into a human-readable param hint like
+    'keyword: string [必填]、limit: integer [選填，預設5]', so the model knows
+    the exact JSON key it must use rather than guessing a synonym.
+    """
+    properties = (schema or {}).get("properties") or {}
+    if not properties:
+        return ""
+    required = set((schema or {}).get("required") or [])
+    parts = []
+    for name, prop in properties.items():
+        ptype = prop.get("type", "any")
+        if name in required:
+            flag = "必填"
+        elif "default" in prop:
+            flag = f"選填，預設={prop['default']}"
+        else:
+            flag = "選填"
+        parts.append(f"{name}: {ptype} [{flag}]")
+    return "（參數：" + "、".join(parts) + "）"
+
+
 def build_system_prompt(tools: list[dict], skill: Skill | None) -> str:
     if tools:
-        tool_list = "\n".join(f"- {t['name']}: {t['description']}" for t in tools)
+        tool_list = "\n".join(
+            f"- {t['name']}: {t['description']}{_format_tool_params(t.get('schema') or {})}"
+            for t in tools
+        )
         tool_names = ", ".join(t["name"] for t in tools)
     else:
         tool_list = NO_TOOLS_PLACEHOLDER

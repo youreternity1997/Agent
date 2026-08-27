@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3:4b-instruct"
     ollama_embed_model: str = "nomic-embed-text"
     llm_temperature: float = 0.2
+    llm_num_ctx: int = 8192
 
     # Database
     database_url: str = "postgresql+asyncpg://gigabyte:gigabyte@localhost:5432/gigabyte_agent"
@@ -31,9 +32,9 @@ class Settings(BaseSettings):
     system_ws_interval_seconds: float = 2.0
 
     # File upload -> LlamaIndex ingestion
-    upload_chunk_size: int = 800
-    upload_chunk_overlap: int = 100
-    upload_max_file_size_mb: int = 20
+    upload_chunk_size: int = 500
+    upload_chunk_overlap: int = 150
+    upload_max_file_size_mb: int = 100
 
     # CORS
     cors_origins: str = "http://localhost:5173"

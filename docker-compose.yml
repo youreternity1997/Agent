@@ -52,6 +52,7 @@ services:
       DATABASE_URL_SYNC: postgresql://gigabyte:gigabyte@db:5432/gigabyte_agent
       MAX_REACT_STEPS: 6
       LLM_TEMPERATURE: 0.2
+      LLM_NUM_CTX: 8192
       CORS_ORIGINS: http://localhost:5173
     ports:
       - "8000:8000"
