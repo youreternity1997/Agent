@@ -45,3 +45,33 @@ export interface UploadedFileInfo {
   error_message: string | null;
   created_at: string;
 }
+
+export interface RagChunk {
+  id: number;
+  title: string;
+  content: string;
+  content_preview: string;
+  motherboard_id: number | null;
+  motherboard_name: string | null;
+  uploaded_file_id: number | null;
+  doc_metadata: Record<string, unknown>;
+}
+
+export interface RagChunksPage {
+  total: number;
+  chunks: RagChunk[];
+}
+
+export interface DbTableInfo {
+  name: string;
+  columns: string[];
+  primary_key: string[];
+  row_count: number;
+}
+
+export interface DbTableRows {
+  columns: string[];
+  primary_key: string[];
+  total: number;
+  rows: Record<string, unknown>[];
+}

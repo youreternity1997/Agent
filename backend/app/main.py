@@ -3,10 +3,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes_admin import router as admin_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_conversations import router as conversations_router
 from app.api.routes_documents import router as documents_router
 from app.api.routes_plan import router as plan_router
+from app.api.routes_rag import router as rag_router
 from app.api.routes_skills import router as skills_router
 from app.api.routes_tools import router as tools_router
 from app.api.routes_transcribe import router as transcribe_router
@@ -44,6 +46,8 @@ app.include_router(tools_router)
 app.include_router(skills_router)
 app.include_router(conversations_router)
 app.include_router(documents_router)
+app.include_router(rag_router)
+app.include_router(admin_router)
 app.include_router(transcribe_router)
 app.include_router(ws_system_router)
 

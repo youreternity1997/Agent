@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { deleteDocument, fetchDocuments, uploadDocument } from "../api/client";
+import RagViewer from "./RagViewer.vue";
 import type { UploadedFileInfo } from "../types";
 
 const ACCEPTED = ".txt,.md,.pdf,.docx";
@@ -10,6 +11,7 @@ const files = ref<UploadedFileInfo[]>([]);
 const isDragging = ref(false);
 const uploadError = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
+const showRagViewer = ref(false);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -72,7 +74,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="panel">
-    <h3>📁 知識庫檔案</h3>
+    <div class="panel-header">
+      <h3>📁 知識庫檔案</h3>
+      <button type="button" class="rag-btn" title="檢視 / 清理 RAG 資料庫" @click="showRagViewer = true">
+        📚 RAG 資料
+      </button>
+    </div>
     <div
       class="dropzone"
       :class="{ dragging: isDragging }"
@@ -97,6 +104,8 @@ onBeforeUnmount(() => {
         <div class="file-status">{{ statusLabel(f) }}</div>
       </li>
     </ul>
+
+    <RagViewer v-if="showRagViewer" @close="showRagViewer = false" />
   </div>
 </template>
 
@@ -108,8 +117,29 @@ onBeforeUnmount(() => {
   padding: 14px 16px;
 }
 h3 {
-  margin: 0 0 10px;
+  margin: 0;
   font-size: 0.95rem;
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.rag-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.rag-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .dropzone {
   border: 1px dashed var(--border);

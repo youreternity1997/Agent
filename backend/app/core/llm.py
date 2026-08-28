@@ -45,36 +45,66 @@ _tokenizer = None
 _init_lock = asyncio.Lock()
 _init_error: str | None = None
 
+# Retries only cover the container's own startup window - not a general
+# "keep trying forever" policy. Observed in practice: right after a restart,
+# the *previous* process's VRAM sometimes hasn't been fully reclaimed by the
+# driver yet (WSL2/Docker Desktop GPU passthrough - see docker-compose.yml's
+# notes on this setup's other GPU passthrough quirks), so vLLM's KV-cache
+# sizing check fails with e.g. "0.5 GiB available, 0.56 GiB needed" even
+# though nvidia-smi shows the GPU as free moments later. A short retry
+# window rides out that race automatically instead of requiring a manual
+# `docker restart` every time it happens.
+_INIT_MAX_ATTEMPTS = 3
+_INIT_RETRY_DELAY_SECONDS = 10.0
+
 
 async def init_engine() -> None:
     """Load the vLLM engine + tokenizer once. Safe to call more than once -
-    only the first call actually loads the model; a failed attempt is cached
-    rather than retried, since re-attempting a multi-GB model load on every
-    request would be far too slow to be useful (fix the underlying issue and
-    restart the process instead).
+    only the first call actually loads the model; a failure that survives
+    every retry is cached rather than retried further, since re-attempting a
+    multi-GB model load on every request would be far too slow to be useful
+    (fix the underlying issue and restart the process instead).
     """
     global _engine, _tokenizer, _init_error
     async with _init_lock:
         if _engine is not None or _init_error is not None:
             return
-        try:
-            from transformers import AutoTokenizer
-            from vllm import AsyncEngineArgs, AsyncLLMEngine
 
-            engine_args = AsyncEngineArgs(
-                model=settings.vllm_model,
-                quantization=settings.vllm_quantization,
-                max_model_len=settings.llm_num_ctx,
-                gpu_memory_utilization=settings.vllm_gpu_memory_utilization,
-                enforce_eager=settings.vllm_enforce_eager,
-                attention_backend=settings.vllm_attention_backend,
-                dtype="auto",
-            )
-            _engine = AsyncLLMEngine.from_engine_args(engine_args)
-            _tokenizer = AutoTokenizer.from_pretrained(settings.vllm_model)
-        except Exception as exc:  # noqa: BLE001
-            _init_error = str(exc)
-            raise LLMError(f"vLLM 引擎啟動失敗：{exc}") from exc
+        from transformers import AutoTokenizer
+        from vllm import AsyncEngineArgs, AsyncLLMEngine
+
+        last_exc: Exception | None = None
+        for attempt in range(1, _INIT_MAX_ATTEMPTS + 1):
+            try:
+                engine_args = AsyncEngineArgs(
+                    model=settings.vllm_model,
+                    quantization=settings.vllm_quantization,
+                    max_model_len=settings.llm_num_ctx,
+                    gpu_memory_utilization=settings.vllm_gpu_memory_utilization,
+                    enforce_eager=settings.vllm_enforce_eager,
+                    attention_backend=settings.vllm_attention_backend,
+                    dtype="auto",
+                )
+                _engine = AsyncLLMEngine.from_engine_args(engine_args)
+                _tokenizer = AutoTokenizer.from_pretrained(settings.vllm_model)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                # Reset before retrying - a partial success (e.g. the engine
+                # itself loaded but the tokenizer fetch failed) must not
+                # leave a live engine referenced while a second attempt
+                # spins up another one alongside it.
+                _engine = None
+                _tokenizer = None
+                if attempt < _INIT_MAX_ATTEMPTS:
+                    print(
+                        f"[llm] vLLM 引擎第 {attempt} 次啟動失敗，"
+                        f"{_INIT_RETRY_DELAY_SECONDS:.0f} 秒後重試：{exc}"
+                    )
+                    await asyncio.sleep(_INIT_RETRY_DELAY_SECONDS)
+
+        _init_error = str(last_exc)
+        raise LLMError(f"vLLM 引擎啟動失敗（已重試 {_INIT_MAX_ATTEMPTS} 次）：{last_exc}") from last_exc
 
 
 def is_ready() -> bool:

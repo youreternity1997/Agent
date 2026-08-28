@@ -28,14 +28,9 @@ from app.skills.loader import get_skill
 settings = get_settings()
 
 TOOL_CALL_TIMEOUT_SECONDS = 60.0
+LLM_STREAM_IDLE_TIMEOUT_SECONDS = 90.0
 
-# Floor kept free for the model's own reply so a context-window-sized prompt
-# doesn't starve generation down to 0 tokens (vLLM then rejects the request
-# outright with a "maximum context length" error rather than just truncating
-# the reply). A multi-step Multi-Planner run is the main thing that pushes
-# the scratchpad this large - several large tool observations pile up across
-# its extra ReAct turns.
-CONTEXT_OUTPUT_RESERVE_TOKENS = 768
+CONTEXT_OUTPUT_RESERVE_TOKENS = max(768, settings.llm_max_tokens)
 
 _THOUGHT_RE = re.compile(r"Thought:\s*(.*?)(?=\n\s*(?:Action:|Final Answer:)|\Z)", re.DOTALL)
 _ACTION_RE = re.compile(r"Action:\s*(.*)")
@@ -47,12 +42,6 @@ _PRIMARY_PARAM = {
     "rag_search": "query",
     "db_query": "keyword",
 }
-
-_NO_RESULT_MARKERS = ("沒有找到", "查無")
-
-
-def _looks_like_no_result(observation: str) -> bool:
-    return any(marker in observation for marker in _NO_RESULT_MARKERS)
 
 
 def _parse_llm_output(text: str) -> dict[str, Any]:
@@ -67,14 +56,9 @@ def _parse_llm_output(text: str) -> dict[str, Any]:
     input_match = _ACTION_INPUT_RE.search(text)
     if action_match and input_match:
         action = action_match.group(1).strip()
-        # Action line is matched non-greedily up to end-of-line; Action Input
-        # captures everything after, which may include trailing chatter - keep
-        # only the first line/JSON blob.
         raw_input = input_match.group(1).strip()
         return {"thought": thought, "action": action, "raw_input": raw_input}
 
-    # Model didn't follow the format - degrade gracefully to a final answer
-    # rather than erroring out the whole conversation.
     return {"thought": thought, "final_answer": text.strip()}
 
 
@@ -123,6 +107,78 @@ def _parse_action_input(action: str, raw_input: str) -> dict:
     return {param_name: cleaned}
 
 
+async def _stream_with_timeout(
+    messages: list[dict], stop: list[str] | None = None
+) -> AsyncGenerator[str, None]:
+    """chat_stream() wrapped with an idle-gap timeout between chunks, so a
+    stalled generation (e.g. vLLM's scheduler stuck under a tight KV cache -
+    observed sitting at 0% GPU utilization producing nothing, with no
+    exception ever raised) surfaces as an LLMError instead of hanging the
+    caller forever."""
+    stream = chat_stream(messages, stop=stop)
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(stream.__anext__(), timeout=LLM_STREAM_IDLE_TIMEOUT_SECONDS)
+            except StopAsyncIteration:
+                return
+            yield chunk
+    except TimeoutError as exc:
+        await stream.aclose()
+        raise LLMError(
+            f"本地 LLM 生成超過 {int(LLM_STREAM_IDLE_TIMEOUT_SECONDS)} 秒沒有新內容，"
+            "疑似推論引擎卡住，已中止此次請求，請稍後再試一次。"
+        ) from exc
+
+
+_FORCE_ANSWER_NOTICE = (
+    "系統通知：你剛才嘗試呼叫的工具目前無法使用（已使用過或不存在），工具呼叫功能已被系統暫時停用。"
+    "請根據以上已經取得的 Observation 內容，直接輸出 Final Answer，完整回答使用者的問題，"
+    "不要再輸出 Thought 或 Action。"
+)
+
+
+async def _force_final_answer(
+    question: str,
+    scratchpad: str,
+    history_block: str,
+    plan_block: str,
+    skill,
+    step: int,
+) -> AsyncGenerator[dict, None]:
+    """Bypass tool-calling entirely and ask the model once more for a Final
+    Answer only. Used right after the model tries to call a tool that isn't
+    available (already used, or never existed) - relying on it to notice the
+    shrunk tool list and self-correct on its own has been observed to fail in
+    practice (it kept re-issuing the identical blocked call 3 times in a row
+    in one real trace, burning steps despite already having enough
+    information in the scratchpad to answer). This forces the model into "no
+    tools available" mode with an extra directive telling it to stop and
+    answer now, instead of letting it keep flailing until step_limit.
+    """
+    forced_system_prompt = build_system_prompt([], skill)
+    forced_user_prompt = build_user_prompt(
+        question, scratchpad + f"\n{_FORCE_ANSWER_NOTICE}\n", history_block, plan_block
+    )
+    messages = [
+        {"role": "system", "content": forced_system_prompt},
+        {"role": "user", "content": forced_user_prompt},
+    ]
+
+    raw_parts: list[str] = []
+    try:
+        async for chunk in _stream_with_timeout(messages):
+            raw_parts.append(chunk)
+            yield {"type": "delta", "content": chunk, "step": step}
+    except LLMError as exc:
+        yield {"type": "error", "content": str(exc)}
+        return
+    raw = "".join(raw_parts)
+
+    parsed = _parse_llm_output(raw)
+    yield {"type": "final_answer", "content": parsed.get("final_answer") or raw.strip(), "step": step}
+
+
 async def run_react(
     question: str,
     selected_tools: list[str],
@@ -137,9 +193,6 @@ async def run_react(
     skill = get_skill(skill_id)
     history_block = build_history_block(history or [])
     plan_block = build_plan_block(plan)
-    # A multi-step plan needs more ReAct turns than a single-shot answer -
-    # scale the budget with the step count instead of hard-coding a bigger
-    # constant, but keep an upper bound so a runaway plan can't loop forever.
     step_limit = settings.max_react_steps
     if plan:
         step_limit = max(step_limit, min(len(plan) * 3, 24))
@@ -165,36 +218,23 @@ async def run_react(
                 yield {"type": "error", "content": f"無法啟動 MCP 工具伺服器：{exc}"}
                 return
 
-        system_prompt = build_system_prompt(tool_descs, skill)
-        enabled_names = {t["name"] for t in tool_descs}
         scratchpad = ""
-        last_action: str | None = None
-        last_action_failed = False
-        # Full-run memory of every (tool, exact input) pair already called -
-        # a Multi-Planner run gives the model many more turns to work with,
-        # which makes it more likely to re-issue the *identical* call (seen
-        # in practice: retrying the same web_search query verbatim several
-        # times because the results didn't contain the exact phrase it
-        # wanted). Since these tools are read-only lookups, an identical
-        # input can only ever produce the same observation again, so repeats
-        # are short-circuited without re-hitting the (often slow) tool.
-        seen_action_keys: set[tuple[str, str]] = set()
+        used_tool_names: set[str] = set()
 
         if plan:
             yield {"type": "plan", "steps": plan}
 
         for step in range(1, step_limit + 1):
+            available_tool_descs = [t for t in tool_descs if t["name"] not in used_tool_names]
+            system_prompt = build_system_prompt(available_tool_descs, skill)
+            enabled_names = {t["name"] for t in available_tool_descs}
+
             user_prompt = build_user_prompt(question, scratchpad, history_block, plan_block)
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
 
-            # Keep the prompt within the context window: if accumulated tool
-            # observations have pushed it too close to llm_num_ctx, drop the
-            # oldest scratchpad blocks (oldest first) until there's enough
-            # room left for a reply, instead of letting vLLM reject the
-            # request outright.
             try:
                 budget = settings.llm_num_ctx - CONTEXT_OUTPUT_RESERVE_TOKENS
                 while scratchpad and count_prompt_tokens(messages) > budget:
@@ -206,7 +246,7 @@ async def run_react(
 
             raw_parts: list[str] = []
             try:
-                async for chunk in chat_stream(messages, stop=["Observation:"]):
+                async for chunk in _stream_with_timeout(messages, stop=["Observation:"]):
                     raw_parts.append(chunk)
                     yield {"type": "delta", "content": chunk, "step": step}
             except LLMError as exc:
@@ -227,20 +267,20 @@ async def run_react(
             action_input = _parse_action_input(action, parsed["raw_input"])
             yield {"type": "action", "tool": action, "input": action_input, "step": step}
 
-            action_key = (action, json.dumps(action_input, ensure_ascii=False, sort_keys=True))
-
-            if action not in enabled_names or session is None:
-                available_str = ", ".join(sorted(enabled_names)) or "(無)"
-                observation = (
-                    f"錯誤：工具「{action}」未啟用或不存在。目前可用工具：{available_str}。"
-                    "請根據已知資訊直接給出 Final Answer，或改用可用工具。"
-                )
-            elif action_key in seen_action_keys:
-                observation = (
-                    f"系統提示：你已經用完全相同的參數呼叫過「{action}」，"
-                    "重複呼叫只會得到一模一樣的結果，不會有新資訊，因此這次系統沒有再實際執行。"
-                    "請改用不同的關鍵字或條件、換一個可用工具，或直接根據已有資訊給出 Final Answer。"
-                )
+            action_blocked = action not in enabled_names or session is None
+            if action_blocked:
+                if action in used_tool_names:
+                    observation = (
+                        f"系統提示：工具「{action}」已經使用過，每個工具在本次對話中只能呼叫一次，"
+                        "目前已從可用工具清單移除，不會再次執行。"
+                        "請從剩餘可用工具清單中選擇其他工具，或直接根據已有資訊給出 Final Answer。"
+                    )
+                else:
+                    available_str = ", ".join(sorted(enabled_names)) or "(無)"
+                    observation = (
+                        f"錯誤：工具「{action}」未啟用或不存在。目前可用工具：{available_str}。"
+                        "請根據已知資訊直接給出 Final Answer，或改用可用工具。"
+                    )
             else:
                 try:
                     observation = await asyncio.wait_for(
@@ -254,17 +294,7 @@ async def run_react(
                     )
                 except Exception as exc:  # noqa: BLE001
                     observation = f"工具執行時發生錯誤：{exc}"
-                seen_action_keys.add(action_key)
-
-            this_action_failed = _looks_like_no_result(observation)
-            if action == last_action and last_action_failed and this_action_failed:
-                observation += (
-                    f"\n\n系統提示：你已經呼叫過「{action}」都查無資料，"
-                    "請不要再重複呼叫同一個工具（即使關鍵字寫法不同），"
-                    "請改用其他可用工具查詢，或直接依現有資訊給出 Final Answer 並誠實告知查不到。"
-                )
-            last_action = action
-            last_action_failed = this_action_failed
+                used_tool_names.add(action)
 
             yield {"type": "observation", "content": observation, "step": step}
 
@@ -274,6 +304,10 @@ async def run_react(
                 f"Action Input: {json.dumps(action_input, ensure_ascii=False)}\n"
                 f"Observation: {observation}\n\n"
             )
+            if action_blocked:
+                async for event in _force_final_answer(question, scratchpad, history_block, plan_block, skill, step):
+                    yield event
+                return
 
         yield {
             "type": "final_answer",

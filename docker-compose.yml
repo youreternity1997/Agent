@@ -53,6 +53,12 @@ services:
     environment:
       VLLM_MODEL: Qwen/Qwen3-8B-AWQ
       VLLM_QUANTIZATION: awq
+      # Tried raising this to 0.92 to fit an 8192-token context, but vLLM's
+      # own startup check reported only 6.87/7.96GiB free on this GPU before
+      # the engine even loads (~1.09GiB is already used by something outside
+      # the container - host display/other processes) - 0.92 (7.32GiB
+      # requested) OOM'd immediately. 0.85 is the known-good value verified
+      # to actually start.
       VLLM_GPU_MEMORY_UTILIZATION: 0.85
       VLLM_ENFORCE_EAGER: true
       # This laptop's RTX 5060 is sm_120 (Blackwell) - FlashAttention's
@@ -73,15 +79,30 @@ services:
       VLLM_USE_FLASHINFER_SAMPLER: 0
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_EMBED_MODEL: nomic-embed-text
+      # Cross-encoder rerank stays on CPU - see VLLM_GPU_MEMORY_UTILIZATION
+      # note above, the GPU has no headroom left for a second model.
+      RERANK_ENABLED: true
+      RERANK_MODEL: BAAI/bge-reranker-base
+      RERANK_DEVICE: cpu
+      RERANK_CANDIDATE_K: 20
+      # huggingface_hub's newer "Xet" chunked-transfer backend hangs
+      # indefinitely mid-download under this Docker/WSL2 network setup
+      # (observed: model.safetensors download stalls partway through and
+      # never resumes). Forces the classic HTTP download path instead, which
+      # is slower per-byte but actually completes.
+      HF_HUB_DISABLE_XET: 1
       DATABASE_URL: postgresql+asyncpg://gigabyte:gigabyte@db:5432/gigabyte_agent
       DATABASE_URL_SYNC: postgresql://gigabyte:gigabyte@db:5432/gigabyte_agent
       MAX_REACT_STEPS: 6
       LLM_TEMPERATURE: 0.2
-      # This laptop's RTX 5060 only has 8GB VRAM - at gpu_memory_utilization
-      # 0.85, Qwen3-8B-AWQ's weights leave just ~0.66GiB for KV cache, too
-      # little for an 8192-token context (needs 1.12GiB; vLLM's own error
-      # put the ceiling at ~4800). 4096 fits with headroom to spare.
-      LLM_NUM_CTX: 4096
+      # This laptop's RTX 5060 only has 8GB VRAM, and only ~6.87GiB of that
+      # is actually free before vLLM even starts (confirmed via vLLM's own
+      # startup memory check - ~1.09GiB is used by something outside the
+      # container). At gpu_memory_utilization 0.85 that leaves ~0.66GiB for
+      # KV cache, putting vLLM's own ceiling at ~4800 tokens - 8192 is not
+      # reachable on this hardware without KV-cache quantization (fp8) or
+      # freeing host-side GPU memory. 4608 fits with a bit of headroom.
+      LLM_NUM_CTX: 4608
       LLM_MAX_TOKENS: 2048
       CORS_ORIGINS: http://localhost:5173
     ports:

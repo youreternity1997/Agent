@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from "vue";
 import ChatWindow from "./components/ChatWindow.vue";
 import ConversationList from "./components/ConversationList.vue";
+import DbAdminPanel from "./components/DbAdminPanel.vue";
 import FileUpload from "./components/FileUpload.vue";
 import HardwareStatus from "./components/HardwareStatus.vue";
 import MessageInput from "./components/MessageInput.vue";
@@ -33,6 +34,7 @@ const isPlanning = ref(false);
 // message it was drafted for. Nothing is sent to /api/chat (and no message
 // bubble is persisted) until the user confirms or cancels it.
 const pendingPlan = ref<{ text: string; steps: PlanStep[] } | null>(null);
+const showDbAdmin = ref(false);
 
 const conversations = reactive<Conversation[]>([]);
 const activeId = ref<number | null>(null);
@@ -273,8 +275,13 @@ onMounted(async () => {
         <div class="brand">🦾 GIGABYTE AI Agent</div>
         <div class="subtitle">主機板產品資料助理 · 本地 LLM + ReAct + MCP</div>
       </div>
-      <HardwareStatus />
+      <div class="topbar-actions">
+        <button type="button" class="db-admin-btn" title="資料庫管理" @click="showDbAdmin = true">🗄</button>
+        <HardwareStatus />
+      </div>
     </header>
+
+    <DbAdminPanel v-if="showDbAdmin" @close="showDbAdmin = false" />
 
     <div class="body">
       <aside class="sidebar">
@@ -333,6 +340,27 @@ onMounted(async () => {
 }
 .topbar-text {
   min-width: 0;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.db-admin-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.db-admin-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .brand {
   font-size: 1.15rem;

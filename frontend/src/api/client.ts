@@ -1,4 +1,11 @@
-import type { Conversation, ConversationMessagesPage, UploadedFileInfo } from "../types";
+import type {
+  Conversation,
+  ConversationMessagesPage,
+  DbTableInfo,
+  DbTableRows,
+  RagChunksPage,
+  UploadedFileInfo,
+} from "../types";
 
 export interface ToolInfo {
   id: string;
@@ -116,6 +123,51 @@ export function uploadDocument(file: File): Promise<UploadedFileInfo> {
 export async function deleteDocument(id: number): Promise<void> {
   const res = await fetch(`/api/documents/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`刪除檔案失敗 (${res.status})`);
+}
+
+export function fetchRagChunks(opts: { limit?: number; offset?: number } = {}): Promise<RagChunksPage> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return fetch(`/api/rag${qs ? `?${qs}` : ""}`).then((res) => unwrap(res, "載入 RAG 資料失敗"));
+}
+
+export async function deleteRagChunk(id: number): Promise<void> {
+  const res = await fetch(`/api/rag/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`刪除 RAG 資料失敗 (${res.status})`);
+}
+
+export async function clearRagDatabase(): Promise<void> {
+  const res = await fetch("/api/rag", { method: "DELETE" });
+  if (!res.ok) throw new Error(`清空 RAG 資料庫失敗 (${res.status})`);
+}
+
+export function fetchDbTables(): Promise<DbTableInfo[]> {
+  return fetch("/api/admin/db/tables").then((res) => unwrap(res, "載入資料表清單失敗"));
+}
+
+export function fetchTableRows(
+  table: string,
+  opts: { limit?: number; offset?: number } = {},
+): Promise<DbTableRows> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return fetch(`/api/admin/db/tables/${table}/rows${qs ? `?${qs}` : ""}`).then((res) =>
+    unwrap(res, "載入資料表內容失敗"),
+  );
+}
+
+export async function deleteTableRow(table: string, pkValue: string | number): Promise<void> {
+  const res = await fetch(`/api/admin/db/tables/${table}/rows/${encodeURIComponent(String(pkValue))}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `刪除資料失敗 (${res.status})`);
+  }
 }
 
 export async function transcribeAudio(blob: Blob): Promise<string> {

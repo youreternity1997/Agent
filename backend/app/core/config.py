@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_embed_model: str = "nomic-embed-text"
 
+    # Reranking (local cross-encoder via transformers, CPU by default - the
+    # GPU is already ~fully committed to vLLM's KV cache on this hardware,
+    # see docker-compose.yml's VLLM_GPU_MEMORY_UTILIZATION notes)
+    rerank_enabled: bool = True
+    rerank_model: str = "BAAI/bge-reranker-base"
+    rerank_device: str = "cpu"
+    # How many candidates the vector search pulls before rerank narrows them
+    # down to top_k - must be >= top_k to have anything to rerank.
+    rerank_candidate_k: int = 20
+
     # Database
     database_url: str = "postgresql+asyncpg://gigabyte:gigabyte@localhost:5432/gigabyte_agent"
     database_url_sync: str = "postgresql://gigabyte:gigabyte@localhost:5432/gigabyte_agent"
