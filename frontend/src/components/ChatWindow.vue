@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import type { ChatMessage } from "../types";
+import { renderMarkdown } from "../utils/markdown";
 
 const props = defineProps<{
   messages: ChatMessage[];
@@ -28,6 +29,8 @@ function handleDelete(msg: ChatMessage) {
 
 function stepLabel(kind: string) {
   switch (kind) {
+    case "plan":
+      return "🗂️ 執行計畫";
     case "thought":
       return "💭 Thought";
     case "action":
@@ -79,11 +82,18 @@ function stepLabel(kind: string) {
                 呼叫工具 <code>{{ step.tool }}</code>
                 <pre>{{ JSON.stringify(step.input, null, 2) }}</pre>
               </div>
+              <ol v-else-if="step.kind === 'plan'" class="step-body plan-list">
+                <li v-for="(planStep, pi) in step.steps" :key="pi">{{ planStep }}</li>
+              </ol>
               <div v-else class="step-body">{{ step.content }}</div>
             </div>
           </details>
 
-          <div class="final-answer" v-if="msg.content">{{ msg.content }}</div>
+          <div
+            v-if="msg.content"
+            class="final-answer markdown-body"
+            v-html="renderMarkdown(msg.content)"
+          ></div>
           <div v-else-if="msg.streamingText" class="streaming-text">{{ msg.streamingText }}<span class="cursor"></span></div>
           <div v-else-if="msg.pending" class="pending">思考中...</div>
         </template>
@@ -220,8 +230,105 @@ function stepLabel(kind: string) {
   border-radius: 6px;
   overflow-x: auto;
 }
-.final-answer {
-  white-space: pre-wrap;
+.plan-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.plan-list li {
+  margin-bottom: 2px;
+}
+.markdown-body {
+  white-space: normal;
+  line-height: 1.6;
+}
+.markdown-body :deep(> *:first-child) {
+  margin-top: 0;
+}
+.markdown-body :deep(> *:last-child) {
+  margin-bottom: 0;
+}
+.markdown-body :deep(p) {
+  margin: 0 0 10px;
+}
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+.markdown-body :deep(li) {
+  margin-bottom: 3px;
+}
+.markdown-body :deep(strong) {
+  font-weight: 700;
+}
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3) {
+  margin: 14px 0 8px;
+  line-height: 1.35;
+}
+.markdown-body :deep(h1:first-child),
+.markdown-body :deep(h2:first-child),
+.markdown-body :deep(h3:first-child) {
+  margin-top: 0;
+}
+.markdown-body :deep(a) {
+  color: var(--accent);
+}
+.markdown-body :deep(blockquote) {
+  margin: 0 0 10px;
+  padding: 2px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-muted);
+}
+.markdown-body :deep(code) {
+  font-size: 0.85em;
+}
+.markdown-body :deep(pre) {
+  white-space: pre;
+  overflow-x: auto;
+  background: var(--bg);
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin: 0 0 10px;
+}
+.markdown-body :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+.markdown-body :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+/* Tables: the main ask - render the agent's "| col | col |" Markdown as an
+   actual bordered/striped table instead of raw pipe text. display:block lets
+   a wide table scroll horizontally on its own instead of overflowing (or
+   forcing) the whole chat bubble wider. */
+.markdown-body :deep(table) {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  width: max-content;
+  border-collapse: collapse;
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+}
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-body :deep(th) {
+  background: var(--bg);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.markdown-body :deep(tbody tr:nth-child(even)) {
+  background: rgba(127, 127, 127, 0.07);
 }
 .pending {
   color: var(--text-muted);

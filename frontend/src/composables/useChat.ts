@@ -1,6 +1,7 @@
 export type ChatEvent =
   | { type: "meta"; user_message_id?: number; assistant_message_id?: number }
   | { type: "delta"; content: string; step: number }
+  | { type: "plan"; steps: string[] }
   | { type: "thought"; content: string; step: number }
   | { type: "action"; tool: string; input: Record<string, unknown>; step: number }
   | { type: "observation"; content: string; step: number }
@@ -13,6 +14,9 @@ interface StreamChatParams {
   conversationId: number;
   tools: string[];
   skill: string | null;
+  /** Multi-Planner: the user-confirmed (possibly edited) step list, or null/omitted
+   * for a direct answer with no plan. */
+  plan?: string[] | null;
   signal?: AbortSignal;
 }
 
@@ -26,12 +30,19 @@ export async function* streamChat({
   conversationId,
   tools,
   skill,
+  plan,
   signal,
 }: StreamChatParams): AsyncGenerator<ChatEvent> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, conversation_id: conversationId, tools, skill }),
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId,
+      tools,
+      skill,
+      plan: plan ?? null,
+    }),
     signal,
   });
 

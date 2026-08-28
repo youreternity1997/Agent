@@ -93,6 +93,16 @@ def _render_prompt(messages: list[dict]) -> str:
     )
 
 
+def count_prompt_tokens(messages: list[dict]) -> int:
+    """Token count of the rendered chat prompt, using the same chat template
+    chat_stream() renders with. Lets a caller (e.g. the ReAct loop) check
+    headroom against llm_num_ctx *before* generating, instead of only finding
+    out about an overflow when vLLM rejects the request outright."""
+    _require_engine()
+    prompt = _render_prompt(messages)
+    return len(_tokenizer(prompt).input_ids)
+
+
 def _build_sampling_params(stop: list[str] | None):
     from vllm import SamplingParams
 
@@ -128,6 +138,13 @@ async def chat_stream(messages: list[dict], stop: list[str] | None = None) -> As
 
     if not got_any:
         raise LLMError("本地 LLM 回傳了空內容")
+
+
+async def chat_complete(messages: list[dict], stop: list[str] | None = None) -> str:
+    """Non-streaming convenience wrapper over chat_stream, for callers (e.g. the
+    planner) that need the full text at once rather than incremental deltas."""
+    parts = [chunk async for chunk in chat_stream(messages, stop=stop)]
+    return "".join(parts)
 
 
 async def embed(text: str) -> list[float]:

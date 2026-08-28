@@ -127,8 +127,25 @@ def build_history_block(history: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_user_prompt(question: str, scratchpad: str, history_block: str = "") -> str:
+def build_plan_block(plan: list[str] | None) -> str:
+    """Format a user-confirmed Multi-Planner step list as an instruction block,
+    reminding the model on every ReAct turn which steps still need covering."""
+    if not plan:
+        return ""
+    lines = ["使用者已檢視並確認以下執行計畫，請依序完成每一個步驟後才輸出 Final Answer："]
+    lines.extend(f"{i}. {step}" for i, step in enumerate(plan, 1))
+    lines.append(
+        "在 Thought 中請標明目前處理到第幾個步驟。所有步驟都完成後，"
+        "於 Final Answer 中彙整每個步驟得到的結果給使用者，不要漏掉任何一個步驟。"
+    )
+    return "\n".join(lines)
+
+
+def build_user_prompt(
+    question: str, scratchpad: str, history_block: str = "", plan_block: str = ""
+) -> str:
     prefix = f"{history_block}\n" if history_block else ""
+    plan_part = f"{plan_block}\n\n" if plan_block else ""
     if scratchpad:
-        return f"{prefix}Question: {question}\n\n{scratchpad}"
-    return f"{prefix}Question: {question}"
+        return f"{prefix}{plan_part}Question: {question}\n\n{scratchpad}"
+    return f"{prefix}{plan_part}Question: {question}"

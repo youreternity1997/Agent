@@ -5,6 +5,7 @@ import ConversationList from "./components/ConversationList.vue";
 import FileUpload from "./components/FileUpload.vue";
 import HardwareStatus from "./components/HardwareStatus.vue";
 import MessageInput from "./components/MessageInput.vue";
+import PlanEditor from "./components/PlanEditor.vue";
 import SkillSelector from "./components/SkillSelector.vue";
 import ToolSelector from "./components/ToolSelector.vue";
 import {
@@ -13,10 +14,11 @@ import {
   deleteMessage as apiDeleteMessage,
   fetchConversations,
   fetchMessages,
+  fetchPlan,
   renameConversation,
 } from "./api/client";
 import { streamChat } from "./composables/useChat";
-import type { ChatMessage, Conversation } from "./types";
+import type { ChatMessage, Conversation, PlanStep } from "./types";
 
 const MESSAGES_PAGE_SIZE = 50;
 
@@ -26,6 +28,11 @@ const isLoading = ref(false);
 const isLoadingMessages = ref(false);
 const isLoadingOlder = ref(false);
 const hasMoreMessages = ref(false);
+const isPlanning = ref(false);
+// Multi-Planner: a drafted plan awaiting user review/edit, keyed to the
+// message it was drafted for. Nothing is sent to /api/chat (and no message
+// bubble is persisted) until the user confirms or cancels it.
+const pendingPlan = ref<{ text: string; steps: PlanStep[] } | null>(null);
 
 const conversations = reactive<Conversation[]>([]);
 const activeId = ref<number | null>(null);
@@ -97,7 +104,66 @@ async function handleDeleteMessage(messageId: number) {
   if (idx !== -1) activeMessages.splice(idx, 1);
 }
 
+function newPlanStepId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `step-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/**
+ * Entry point for a new user message. First asks the Multi-Planner whether
+ * this needs breaking into steps; simple chat ("一般聊天") skips straight to
+ * runChat with no plan. A multi-step goal instead surfaces an editable
+ * PlanEditor and waits for the user to confirm (or cancel) before anything
+ * is actually sent to the agent.
+ */
 async function handleSend(text: string) {
+  if (activeId.value == null) return;
+
+  isPlanning.value = true;
+  try {
+    const result = await fetchPlan({
+      message: text,
+      conversationId: activeId.value,
+      tools: selectedTools.value,
+      skill: selectedSkill.value,
+    });
+    if (result.needs_plan && result.steps.length > 0) {
+      pendingPlan.value = {
+        text,
+        steps: result.steps.map((content) => ({ id: newPlanStepId(), content })),
+      };
+      return;
+    }
+  } catch {
+    // Planning is best-effort - if it fails, fall through to a direct answer
+    // rather than blocking the user from asking their question at all.
+  } finally {
+    isPlanning.value = false;
+  }
+  await runChat(text, null);
+}
+
+function handlePlanStepsUpdate(steps: PlanStep[]) {
+  if (pendingPlan.value) pendingPlan.value.steps = steps;
+}
+
+async function handlePlanConfirm() {
+  if (!pendingPlan.value) return;
+  const { text, steps } = pendingPlan.value;
+  const plan = steps.map((s) => s.content.trim()).filter((c) => c.length > 0);
+  pendingPlan.value = null;
+  await runChat(text, plan);
+}
+
+function handlePlanCancel() {
+  if (!pendingPlan.value) return;
+  const { text } = pendingPlan.value;
+  pendingPlan.value = null;
+  runChat(text, null);
+}
+
+async function runChat(text: string, plan: string[] | null) {
   const conv = activeConversation();
   if (!conv || activeId.value == null) return;
 
@@ -127,11 +193,15 @@ async function handleSend(text: string) {
       conversationId: activeId.value,
       tools: selectedTools.value,
       skill: selectedSkill.value,
+      plan,
     })) {
       switch (event.type) {
         case "meta":
           if (event.user_message_id) userMsg.id = event.user_message_id;
           if (event.assistant_message_id) assistantMsg.id = event.assistant_message_id;
+          break;
+        case "plan":
+          assistantMsg.steps.push({ kind: "plan", steps: event.steps });
           break;
         case "delta":
           assistantMsg.streamingText = (assistantMsg.streamingText ?? "") + event.content;
@@ -230,7 +300,16 @@ onMounted(async () => {
           @load-older="handleLoadOlder"
           @delete-message="handleDeleteMessage"
         />
-        <MessageInput :disabled="isLoading" @send="handleSend" />
+        <div v-if="isPlanning" class="planning-hint">🧠 正在評估是否需要拆解成步驟...</div>
+        <PlanEditor
+          v-if="pendingPlan"
+          :steps="pendingPlan.steps"
+          :goal="pendingPlan.text"
+          @update:steps="handlePlanStepsUpdate"
+          @confirm="handlePlanConfirm"
+          @cancel="handlePlanCancel"
+        />
+        <MessageInput :disabled="isLoading || isPlanning || !!pendingPlan" @send="handleSend" />
       </main>
     </div>
   </div>
@@ -284,5 +363,11 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+.planning-hint {
+  margin: 0 20px 12px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-style: italic;
 }
 </style>

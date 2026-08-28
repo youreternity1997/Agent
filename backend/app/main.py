@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes_chat import router as chat_router
 from app.api.routes_conversations import router as conversations_router
 from app.api.routes_documents import router as documents_router
+from app.api.routes_plan import router as plan_router
 from app.api.routes_skills import router as skills_router
 from app.api.routes_tools import router as tools_router
 from app.api.routes_transcribe import router as transcribe_router
@@ -38,6 +39,7 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+app.include_router(plan_router)
 app.include_router(tools_router)
 app.include_router(skills_router)
 app.include_router(conversations_router)

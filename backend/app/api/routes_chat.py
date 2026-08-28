@@ -10,6 +10,7 @@ from app.agent.react_agent import run_react
 from app.core.config import get_settings
 from app.db.database import get_session
 from app.db.models import Conversation, Message
+from app.services.history import load_recent_history
 
 router = APIRouter(prefix="/api", tags=["chat"])
 settings = get_settings()
@@ -20,23 +21,14 @@ class ChatRequest(BaseModel):
     conversation_id: int = Field(..., description="所屬對話的 id")
     tools: list[str] = Field(default_factory=list, description="前端勾選啟用的 MCP 工具 id 清單")
     skill: str | None = Field(default=None, description="選用的 Skill id")
+    plan: list[str] | None = Field(
+        default=None,
+        description="Multi-Planner：使用者確認/編輯後的執行步驟計畫，為 None 代表不使用計畫、直接一般回答",
+    )
 
 
 def _sse_event(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-async def _load_history(session: AsyncSession, conversation_id: int) -> list[dict]:
-    """Sliding window: only the most recent N messages are sent to the LLM as context."""
-    stmt = (
-        select(Message)
-        .where(Message.conversation_id == conversation_id)
-        .order_by(Message.id.desc())
-        .limit(settings.llm_context_window_messages)
-    )
-    rows = (await session.execute(stmt)).scalars().all()
-    rows.reverse()
-    return [{"role": m.role, "content": m.content} for m in rows if m.content]
 
 
 async def _trim_stored_history(session: AsyncSession, conversation_id: int) -> None:
@@ -79,7 +71,7 @@ async def chat_endpoint(req: ChatRequest, session: AsyncSession = Depends(get_se
 
     # Sliding window over prior turns; drop the user turn just persisted above since
     # it's passed separately as `question` (it's always the newest row here).
-    history = (await _load_history(session, conversation.id))[:-1]
+    history = (await load_recent_history(session, conversation.id))[:-1]
 
     async def event_stream():
         final_answer = ""
@@ -91,9 +83,12 @@ async def chat_endpoint(req: ChatRequest, session: AsyncSession = Depends(get_se
                 history=history,
                 selected_tools=req.tools,
                 skill_id=req.skill,
+                plan=req.plan,
             ):
                 event_type = event.get("type")
-                if event_type == "thought":
+                if event_type == "plan":
+                    steps.append({"kind": "plan", "steps": event.get("steps")})
+                elif event_type == "thought":
                     steps.append({"kind": "thought", "step": event.get("step"), "content": event.get("content")})
                 elif event_type == "action":
                     steps.append(

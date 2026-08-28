@@ -12,6 +12,33 @@ export interface SkillInfo {
   description: string;
 }
 
+export interface PlanResult {
+  needs_plan: boolean;
+  steps: string[];
+}
+
+export interface PlanRequestParams {
+  message: string;
+  conversationId: number;
+  tools: string[];
+  skill: string | null;
+}
+
+/** Multi-Planner preview: ask the backend whether this message needs to be
+ * broken into steps, and if so, get a first draft to show for editing. */
+export function fetchPlan(params: PlanRequestParams): Promise<PlanResult> {
+  return fetch("/api/plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: params.message,
+      conversation_id: params.conversationId,
+      tools: params.tools,
+      skill: params.skill,
+    }),
+  }).then((res) => unwrap(res, "產生執行計畫失敗"));
+}
+
 export async function fetchTools(): Promise<ToolInfo[]> {
   const res = await fetch("/api/tools");
   if (!res.ok) throw new Error(`載入工具清單失敗 (${res.status})`);

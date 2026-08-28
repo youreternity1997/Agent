@@ -1,9 +1,17 @@
 export interface ReactStep {
-  kind: "thought" | "action" | "observation" | "error";
+  kind: "thought" | "action" | "observation" | "error" | "plan";
   step?: number;
   content?: string;
   tool?: string;
   input?: Record<string, unknown>;
+  /** Only for kind "plan": the confirmed Multi-Planner step list the agent is executing. */
+  steps?: string[];
+}
+
+/** One editable step in a Multi-Planner draft, before the user confirms it. */
+export interface PlanStep {
+  id: string;
+  content: string;
 }
 
 export interface ChatMessage {
