@@ -43,6 +43,14 @@ function stepLabel(kind: string) {
       return kind;
   }
 }
+
+// Observation content can be very long (raw RAG/web-search dumps), so it
+// starts collapsed to keep the trace compact; other step kinds are short
+// enough to stay open by default. Each step is independently toggleable
+// via its own <details>, regardless of this default.
+function stepDefaultOpen(kind: string) {
+  return kind !== "observation";
+}
 </script>
 
 <template>
@@ -76,8 +84,14 @@ function stepLabel(kind: string) {
         <template v-else>
           <details v-if="msg.steps.length > 0" class="trace" open>
             <summary>推理過程（{{ msg.steps.length }} 步）</summary>
-            <div v-for="(step, si) in msg.steps" :key="si" class="step" :class="step.kind">
-              <div class="step-label">{{ stepLabel(step.kind) }}<span v-if="step.step"> · 第 {{ step.step }} 步</span></div>
+            <details
+              v-for="(step, si) in msg.steps"
+              :key="si"
+              class="step"
+              :class="step.kind"
+              :open="stepDefaultOpen(step.kind)"
+            >
+              <summary class="step-label">{{ stepLabel(step.kind) }}<span v-if="step.step"> · 第 {{ step.step }} 步</span></summary>
               <div v-if="step.kind === 'action'" class="step-body">
                 呼叫工具 <code>{{ step.tool }}</code>
                 <pre>{{ JSON.stringify(step.input, null, 2) }}</pre>
@@ -85,8 +99,8 @@ function stepLabel(kind: string) {
               <ol v-else-if="step.kind === 'plan'" class="step-body plan-list">
                 <li v-for="(planStep, pi) in step.steps" :key="pi">{{ planStep }}</li>
               </ol>
-              <div v-else class="step-body">{{ step.content }}</div>
-            </div>
+              <div v-else class="step-body" :class="{ scrollable: step.kind === 'observation' }">{{ step.content }}</div>
+            </details>
           </details>
 
           <div
@@ -215,11 +229,26 @@ function stepLabel(kind: string) {
 .step-label {
   font-weight: 700;
   margin-bottom: 3px;
+  cursor: pointer;
+  list-style: none;
+}
+.step-label::-webkit-details-marker {
+  display: none;
+}
+.step-label::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 4px;
+  transition: transform 0.15s;
+}
+.step[open] > .step-label::before {
+  transform: rotate(90deg);
 }
 .step.error .step-label {
   color: #e5484d;
 }
 .step-body {
+  margin-top: 3px;
   color: var(--text-muted);
   white-space: pre-wrap;
 }
@@ -229,6 +258,13 @@ function stepLabel(kind: string) {
   padding: 6px 8px;
   border-radius: 6px;
   overflow-x: auto;
+}
+/* Observation dumps (raw RAG/web-search text) can be huge - cap the height
+   and let it scroll internally instead of stretching the whole chat window. */
+.step-body.scrollable {
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 .plan-list {
   margin: 0;
