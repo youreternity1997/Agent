@@ -145,6 +145,7 @@ async def _force_final_answer(
     plan_block: str,
     skill,
     step: int,
+    tools_exhausted: bool = False,
 ) -> AsyncGenerator[dict, None]:
     """Bypass tool-calling entirely and ask the model once more for a Final
     Answer only. Used right after the model tries to call a tool that isn't
@@ -155,8 +156,17 @@ async def _force_final_answer(
     information in the scratchpad to answer). This forces the model into "no
     tools available" mode with an extra directive telling it to stop and
     answer now, instead of letting it keep flailing until step_limit.
+
+    `tools_exhausted` must be True whenever a real Observation already exists
+    in the scratchpad (i.e. some tool call already succeeded this
+    conversation) - otherwise build_system_prompt's default "no tools ever
+    enabled" framing actively misleads the model into claiming tools were
+    never enabled and answering from its own (possibly stale) knowledge
+    instead of the Observation that's sitting right there. Observed in
+    practice: the plain _FORCE_ANSWER_NOTICE text in the scratchpad alone
+    was not enough to override that framing.
     """
-    forced_system_prompt = build_system_prompt([], skill)
+    forced_system_prompt = build_system_prompt([], skill, tools_exhausted=tools_exhausted)
     forced_user_prompt = build_user_prompt(
         question, scratchpad + f"\n{_FORCE_ANSWER_NOTICE}\n", history_block, plan_block
     )
@@ -226,7 +236,8 @@ async def run_react(
 
         for step in range(1, step_limit + 1):
             available_tool_descs = [t for t in tool_descs if t["name"] not in used_tool_names]
-            system_prompt = build_system_prompt(available_tool_descs, skill)
+            tools_exhausted = bool(tool_descs) and not available_tool_descs
+            system_prompt = build_system_prompt(available_tool_descs, skill, tools_exhausted=tools_exhausted)
             enabled_names = {t["name"] for t in available_tool_descs}
 
             user_prompt = build_user_prompt(question, scratchpad, history_block, plan_block)
@@ -305,7 +316,10 @@ async def run_react(
                 f"Observation: {observation}\n\n"
             )
             if action_blocked:
-                async for event in _force_final_answer(question, scratchpad, history_block, plan_block, skill, step):
+                async for event in _force_final_answer(
+                    question, scratchpad, history_block, plan_block, skill, step,
+                    tools_exhausted=bool(used_tool_names),
+                ):
                     yield event
                 return
 
